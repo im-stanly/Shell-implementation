@@ -2,7 +2,7 @@ void checkWrite(int res, long properSize);
 
 int readingFromSTDIN(struct stat *st);
 
-char *splitLine(char *buf, int bufSize, int *isEndOfFile);
+char *splitLine(char *buf, int bufSize);
 
 int isBufforOkay(char *buf, int *readResult, int *distanseAlreadyReaded, char *end);
 
@@ -12,4 +12,6 @@ int checkBufBegin(char *buf, char *end, int *readResult, int *distanseAlreadyRea
 
 void printBuf(char *buf);
 
-int prepareBuf(char *buf, char **end, int *readResult, int *distanseAlreadyReaded, int *isEndOfFile, struct stat *st);
+int prepareBuf(char *buf, char **end, int *readResult, int *distanseAlreadyReaded, int *isEndOfFile, struct stat *st, int isdebug);
+
+void input_handler(int isTerminal);
