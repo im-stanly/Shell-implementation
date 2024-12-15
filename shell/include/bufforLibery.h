@@ -13,3 +13,5 @@ int checkBufBegin(char *buf, char *end, int *readResult, int *distanseAlreadyRea
 void printBuf(char *buf);
 
 int prepareBuf(char *buf, char **end, int *readResult, int *distanseAlreadyReaded, int *isEndOfFile, struct stat *st);
+
+void input_handler(int isTerminal);
