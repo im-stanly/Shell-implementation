@@ -13,4 +13,5 @@ void createProc (int in, int out, char **arguments, command *com, pipeline *p);
 
 void execPipeline (command *com, pipeline *p);
 
-void execCommand(char *buf);
+void execCommand(char *buf, char *end, int *readResult, struct stat *st, int *distanseAlreadyReaded, 
+					int *isEndOfFile, pipelineseq *ln);

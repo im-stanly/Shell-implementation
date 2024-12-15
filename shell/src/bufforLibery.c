@@ -3,36 +3,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <errno.h>
 
 #include "config.h"
 #include "siparse.h"
 #include "pipeLibery.h"
 #include "signalLibrary.h"
-
-/*
- * 1. Pamietac o '#', '\n' oraz ' ' bo to bedzie przesuniecie o 1 pozucje albo że komentarz(lub \n) czyli wczytujemy cala linie do konca
- 
- * 2. Pamietac o wypisaniu PROMPT_STR czyli jakies:
-		int isReadingFromSTDIN = readingFromSTDIN(st);
-		if(st != NULL && isReadingFromSTDIN && (*readResult) < 2)
-			checkWrite(write(1, PROMPT_STR, sizeof(PROMPT_STR)), sizeof(PROMPT_STR));
-
- * 3. Pamietac ze jak za dluga linia to:
-		if((*readResult) == MAX_LINE_LENGTH){
-			fprintf(stderr, "Syntax error.\n");
-			fflush(stderr);
-		}
- */
-
-/*
-	Documentation:
-
-	- prepareBuf() zwraca:
-		1 - jeśli trzeba powtorzyc czytanie czyli w main zrobic continue
-		2 - jeśli read() zwróciło 0 czyli koniec pliku
-		0 - jeśli wszystko poszło dobrze
-*/
 
 void checkWrite(int res, long properSize){
 	printBeforePrompt();
@@ -54,91 +29,135 @@ int readingFromSTDIN(struct stat *st){
 	return S_ISCHR(st->st_mode);
 }
 
-char *splitLine(char *buf, int bufSize){
+char *splitLine(char *buf, int bufSize, int *isEndOfFile){
 	char *end = memchr(buf, '\n', bufSize);
 
 	if(end == NULL){
 		end = memchr(buf, '\0', bufSize);
-		if(end == NULL)
-			return NULL;
+		if(end != NULL)
+			*isEndOfFile = 1;
+		return end != NULL ? end : NULL;
 	}
 	end[0] = '\0';
 	return end;
 }
 
-void handle_long_line(char *buf, int *r, char *curr_line) {
-	fprintf(stderr, "%s\n", SYNTAX_ERROR_STR);
-	while(1) {
-		memmove(buf, curr_line, 0);
-		curr_line = buf;
-		*r = read(STDIN_FILENO, curr_line, MAX_LINE_LENGTH);
-		if (*r == -1) {
-			perror("read() failed");
-			exit(EXIT_FAILURE);
-		}
-		if(*r == 0)
-			exit(EXIT_SUCCESS);
-		if(strchr(curr_line, '\n') != NULL)
-			break;
+void lineFullRead(char *buf, int *readResult, int *distanseAlreadyReaded, char *end){
+	char *endLine = memchr(buf, '\n', (*readResult));
+	if(endLine == NULL)
+		endLine = memchr(buf, '\0', (*readResult));
+	while (endLine == NULL && (*readResult) < MAX_LINE_LENGTH){
+		*readResult += read(0, (buf + (*readResult)), (MAX_LINE_LENGTH - (*readResult)));
+		*distanseAlreadyReaded = 0;
+		end = buf - 1;
+		endLine = memchr(buf, '\n', (*readResult));
+		if(endLine == NULL)
+			endLine = memchr(buf, '\0', (*readResult));
 	}
 }
 
-void process_input(char *buf, int r, int isTerminal) {
-	buf[r] = '\0';
-	char *curr_line = buf, *next_line=NULL;
-	int new_r;
+int isBufforOkay(char *buf, int *readResult, int *distanseAlreadyReaded, char *end){
+	char tmp = buf[0];
+	lineFullRead(buf, readResult, distanseAlreadyReaded, end);
 
-	while(r > 0) {
-		next_line = strchr(curr_line,'\n');
-		if(next_line != NULL) {
-			next_line[0] = '\0';
-			if(next_line - curr_line > 0 && curr_line[0] != '#')
-				execCommand(curr_line);
-			r -= next_line - curr_line + 1;
-			curr_line = next_line + 1;
-		} else {
-			if(r >= MAX_LINE_LENGTH){
-				handle_long_line(buf, &r, curr_line);
-				next_line = strchr(curr_line,'\n');
-				next_line[0] = '\0';
-				r -= next_line - curr_line + 1;
-				curr_line = next_line + 1;
+	if(tmp == '\n' || ((*readResult) > 2 && tmp == '\0') || tmp == '#' || tmp == ' ')
+		return 0;
+	if(tmp != '\0' && tmp != EOF)
+		return 1;
+	return 0;
+}
+
+void readToBuf(char *buf, char *end, int *readResult, struct stat *st, int *distanseAlreadyReaded, int *isEndOfFile){
+	int isReadingFromSTDIN = readingFromSTDIN(st);
+	if(st != NULL && isReadingFromSTDIN && (*readResult) < 2)
+		checkWrite(write(1, PROMPT_STR, sizeof(PROMPT_STR)), sizeof(PROMPT_STR));
+	
+	memmove(buf, end + 1, (*readResult));
+	if((isReadingFromSTDIN && (*readResult) < 2) || (!isReadingFromSTDIN && (*isEndOfFile) == 0)){
+		*readResult += read(0, (buf + (*readResult)), (MAX_LINE_LENGTH - (*readResult)));
+		*distanseAlreadyReaded = 0;
+		end = buf - 1;
+	}
+}
+
+int checkBufBegin(char *buf, char *end, int *readResult, int *distanseAlreadyReaded, int *isEndOfFile, struct stat *st){
+	if(!isBufforOkay(buf, readResult, distanseAlreadyReaded, end)){
+		if(buf[0] == '\0' || buf[0] == EOF){
+			(*isEndOfFile) = 1;
+			return 1;
+		}
+		if(buf[0] == '\n' || buf[0] == ' '){
+			if((*readResult) > 1)
+				(*readResult)--;
+			else
+				(*readResult) = 0;
+			end = buf;
+			(*distanseAlreadyReaded) = 2 + end - buf;
+			readToBuf(buf, end, readResult, st, distanseAlreadyReaded, isEndOfFile);
+		}
+		if(buf[0] == '#'){
+            char *newline = strchr(buf, '\n');
+            if(newline){
+                (*distanseAlreadyReaded) = 2 + newline - buf;
+				(*readResult) -= (*distanseAlreadyReaded) - 1;
+				readToBuf(buf, newline, readResult, st, distanseAlreadyReaded, isEndOfFile);
+            }
+			else{
+				(*distanseAlreadyReaded) = 0;
+				(*readResult) = 0;
+			}
+        }
+		return -1;
+	}
+	return 0;
+}
+
+void handleEndOfLine(char *buf, char **end, int *readResult, int *distanseAlreadyReaded, int *isEndOfFile, struct stat *st, int *result){
+	int endlFinded = 0;
+	char *endLine;
+	
+	if((*readResult) == MAX_LINE_LENGTH){
+		fprintf(stderr, "Syntax error.\n");
+		fflush(stderr);
+	}
+	*result = -1;
+	(*readResult) = read(0, buf, MAX_LINE_LENGTH);
+
+	while (endlFinded == 0 && (*readResult) > 0){
+		endLine = splitLine(buf, (*readResult), isEndOfFile);
+		if(endLine != NULL){
+			endlFinded = 1;
+			(*distanseAlreadyReaded) = 2 + endLine - buf;
+			(*readResult) -= ((*distanseAlreadyReaded) - 1);
+			readToBuf(buf, endLine, readResult, st, distanseAlreadyReaded, isEndOfFile);
+			*end = endLine;
+			break;
+		}
+		else if(*isEndOfFile == 0){
+			(*readResult) = read(0, buf, MAX_LINE_LENGTH);
+		}
+	}
+	(*distanseAlreadyReaded) = 0;
+}
+
+int prepareBuf(char *buf, char **end, int *readResult, int *distanseAlreadyReaded, int *isEndOfFile, struct stat *st){
+	int result = -1;
+
+	while (result != 0 && (*readResult) > 0){
+		result = checkBufBegin(buf, *end, readResult, distanseAlreadyReaded, isEndOfFile, st);
+
+		if(result == 1 || (*readResult) == 0)
+			return 1;
+		if(result == 0){
+			*end = splitLine(buf, (*readResult), isEndOfFile);
+			if(*isEndOfFile == 1)
+				return 1;
+			if((*end) == NULL){
+				handleEndOfLine(buf, end, readResult, distanseAlreadyReaded, isEndOfFile, st, &result);
 				continue;
 			}
-			memmove(buf, curr_line, r);
-			curr_line = buf;
-			new_r = read(STDIN_FILENO, curr_line + r, MAX_LINE_LENGTH - r);
-			if(new_r == -1) {
-				perror("read() failed");
-				exit(EXIT_FAILURE);
-			}
-			if(new_r == 0)
-				exit(EXIT_SUCCESS);
-			r += new_r;
-			buf[r] = '\0';
+			result = 0;
 		}
 	}
-}
-
-void input_handler(int isTerminal) {
-	char buf[MAX_LINE_LENGTH];
-	int r;
-	do {
-		if(isTerminal) {
-			if(write(STDOUT_FILENO, PROMPT_STR, strlen(PROMPT_STR)) == -1) {
-				perror("write() failed");
-				exit(EXIT_FAILURE);
-			}
-		}
-		r = read(STDIN_FILENO, buf, MAX_LINE_LENGTH);
-		if(r == -1 && errno == EINTR)
-			continue;
-		if(r == -1) {
-			perror("read() failed");
-			exit(EXIT_FAILURE);
-		}
-		if(r == 0)
-			break;
-		process_input(buf, r, isTerminal);
-	} while(1);
+	return (*readResult) > 0 ? 0 : 1;
 }
