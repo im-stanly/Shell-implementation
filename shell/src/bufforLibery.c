@@ -42,13 +42,6 @@ char *splitLine(char *buf, int bufSize){
 	return end;
 }
 
-void debugBuf(char *buf, int readResult){
-	printf("--------readResult = %d---------\n", readResult);
-	printf("%s\n", buf);
-	printf("--------------------\n");
-	fflush(stdout);
-}
-
 /**
  * discardLine(...) will discard the current line from buf, reading more if necessary until a newline or EOF.
  * After completion, buf will contain only data after the discarded line (if any),
@@ -106,10 +99,7 @@ void discardLine(char *buf, int *readResult) {
  * - 1 if we skipped something and should try reading again
  * - 2 if EOF is reached with no more data
  */
-int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct stat *st, pipelineseq *ln, int isdebug) {
-    isdebug = 0;
-
-    // If we had a previously completed line, remove it
+int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile) {
     if (*end != NULL) {
         int lineLen = (int)(*end - buf) + 1;
         (*readResult) -= lineLen;
@@ -118,7 +108,6 @@ int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct 
         *end = NULL;
     }
 
-    // Keep reading until we have a newline, EOF, or a full buffer
     while (1) {
         if (!*isEndOfFile && *readResult < MAX_LINE_LENGTH) {
             int n = read(STDIN_FILENO, buf + (*readResult), MAX_LINE_LENGTH - (*readResult));
@@ -128,7 +117,6 @@ int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct 
                 perror("read() failed");
                 exit(1);
             } else if (n == 0) {
-                // EOF encountered
                 *isEndOfFile = 1;
             } else {
                 (*readResult) += n;
@@ -136,16 +124,13 @@ int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct 
             }
         }
 
-        // If we found a newline, stop reading more for now
         char *newlinePos = strchr(buf, '\n');
         if (newlinePos)
             break;
 
-        // If we've reached EOF (no more data), stop reading
         if (*isEndOfFile)
             break;
 
-        // If we filled the buffer completely without finding a newline
         if (*readResult == MAX_LINE_LENGTH) {
             fprintf(stderr, "Syntax error.\n");
             fflush(stderr);
@@ -153,11 +138,8 @@ int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct 
             return 1;
         }
 
-        // Otherwise, loop to read more data (partial line scenario)
     }
 
-    // Now we have either a newline or EOF.
-    // Remove leading spaces and newlines
     while (*readResult > 0 && (buf[0] == ' ' || buf[0] == '\n')) {
         (*readResult)--;
         memmove(buf, buf + 1, *readResult);
@@ -168,11 +150,9 @@ int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct 
     if (*readResult == 0 && *isEndOfFile)
         return 2;
 
-    // If no data but not EOF, try reading again
     if (*readResult == 0)
         return 1;
 
-    // Check if it's a comment line
     if (buf[0] == '#') {
         discardLine(buf, readResult);
         return 1;
@@ -181,10 +161,8 @@ int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct 
     char *newline = splitLine(buf, (*readResult) + 1);
     if (newline)
         *end = newline;
-    else {
-        // No newline found, possibly EOF line
+    else 
         *end = NULL; 
-    }
 
     return 0;
 }
