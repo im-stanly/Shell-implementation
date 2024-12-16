@@ -72,29 +72,44 @@ int cdShell(char *argv[]){
     return 0;
 }
 
-int killShell(char *argv[]){
-    if (argv[1] && argv[2]){
-        int pid = stringToInt(argv[2]);
-		
-		int signal;
-		if(argv[1][0] == '-')
-			signal = stringToInt(argv[1] + 1);
-		else
-			signal = stringToInt(argv[1]);
+int killShell(char *argv[]) {
+    int signal_number = SIGTERM; 
+    int pid;
+    char *endptr;
+    long result;
+    argv++;
 
-        if (pid == -1 || signal == -1 || kill(pid, signal) != 0){
+    if (argv[0] == NULL) {
+        errno = EIO;
+        return 1;
+    }
+
+    if (argv[0][0] == '-') {
+        errno = 0;
+        result = strtol(argv[0] + 1, &endptr, 10);
+        if (*endptr != '\0' || errno != 0 || result <= 0 || result > INT_MAX) {
             errno = EIO;
             return 1;
         }
-    } 
-	else if (argv[1]){
-		int pid = stringToInt(argv[1]);
-		if(pid == -1 || kill(pid, SIGTERM) != 0){
-			errno = EIO;
-            return 1;
-		}
-	}
-	else{
+        signal_number = (int) result;
+        argv++;
+    }
+
+    if (argv[0] == NULL) {
+        errno = EIO;
+        return 1;
+    }
+
+    errno = 0;
+    result = strtol(argv[0], &endptr, 10);
+    if (*endptr != '\0' || errno != 0 || result > INT_MAX || result < INT_MIN) {
+        errno = EIO;
+        return 1;
+    }
+
+    pid = (int) result;
+
+    if (kill(pid, signal_number) < 0) {
         errno = EIO;
         return 1;
     }
