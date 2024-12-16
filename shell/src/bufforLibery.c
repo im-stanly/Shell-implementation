@@ -2,8 +2,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
-#include <errno.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #include "config.h"
 #include "siparse.h"
@@ -30,79 +30,161 @@ int readingFromSTDIN(struct stat *st){
 	return S_ISCHR(st->st_mode);
 }
 
-void handle_long_line(char *buf, int *r, char *curr_line) {
-	fprintf(stderr, "%s\n", SYNTAX_ERROR_STR);
-	while(1) {
-		memmove(buf, curr_line, 0);
-		curr_line = buf;
-		*r = read(STDIN_FILENO, curr_line, MAX_LINE_LENGTH);
-		if (*r == -1) {
-			perror("read() failed");
-			exit(EXIT_FAILURE);
-		}
-		if(*r == 0)
-			exit(EXIT_SUCCESS);
-		if(strchr(curr_line, '\n') != NULL)
-			break;
+char *splitLine(char *buf, int bufSize){
+	char *end = memchr(buf, '\n', bufSize);
+
+	if(end == NULL){
+		end = memchr(buf, '\0', bufSize);
+		if(end == NULL)
+			return NULL;
 	}
+	end[0] = '\0';
+	return end;
 }
 
-void process_input(char *buf, int r, int isTerminal) {
-	buf[r] = '\0';
-	char *curr_line = buf, *next_line=NULL;
-	int new_r;
-
-	while(r > 0) {
-		next_line = strchr(curr_line,'\n');
-		if(next_line != NULL) {
-			next_line[0] = '\0';
-			if(next_line - curr_line > 0 && curr_line[0] != '#')
-				execCommand(curr_line);
-			r -= next_line - curr_line + 1;
-			curr_line = next_line + 1;
-		} else {
-			if(r >= MAX_LINE_LENGTH){
-				handle_long_line(buf, &r, curr_line);
-				next_line = strchr(curr_line,'\n');
-				next_line[0] = '\0';
-				r -= next_line - curr_line + 1;
-				curr_line = next_line + 1;
-				continue;
-			}
-			memmove(buf, curr_line, r);
-			curr_line = buf;
-			new_r = read(STDIN_FILENO, curr_line + r, MAX_LINE_LENGTH - r);
-			if(new_r == -1) {
-				perror("read() failed");
-				exit(EXIT_FAILURE);
-			}
-			if(new_r == 0)
-				exit(EXIT_SUCCESS);
-			r += new_r;
-			buf[r] = '\0';
-		}
-	}
+void debugBuf(char *buf, int readResult){
+	printf("--------readResult = %d---------\n", readResult);
+	printf("%s\n", buf);
+	printf("--------------------\n");
+	fflush(stdout);
 }
 
-void input_handler(int isTerminal) {
-	char buf[MAX_LINE_LENGTH];
-	int r;
-	do {
-		if(isTerminal) {
-			if(write(STDOUT_FILENO, PROMPT_STR, strlen(PROMPT_STR)) == -1) {
-				perror("write() failed");
-				exit(EXIT_FAILURE);
-			}
-		}
-		r = read(STDIN_FILENO, buf, MAX_LINE_LENGTH);
-		if(r == -1 && errno == EINTR)
-			continue;
-		if(r == -1) {
-			perror("read() failed");
-			exit(EXIT_FAILURE);
-		}
-		if(r == 0)
-			break;
-		process_input(buf, r, isTerminal);
-	} while(1);
+/**
+ * discardLine(...) will discard the current line from buf, reading more if necessary until a newline or EOF.
+ * After completion, buf will contain only data after the discarded line (if any),
+ * and readResult will be updated accordingly.
+ */
+void discardLine(char *buf, int *readResult) {
+    char *newline = strchr(buf, '\n');
+    if (newline) {
+        int lineLen = (int)(newline - buf) + 1;
+        *readResult -= lineLen;
+        memmove(buf, newline + 1, *readResult);
+        buf[*readResult] = '\0';
+        return;
+    }
+
+    while (1) {
+        *readResult = 0;
+        buf[0] = '\0';
+
+        int n = read(STDIN_FILENO, buf, MAX_LINE_LENGTH);
+        if (n == -1 && errno == EINTR) {
+            continue;
+        } else if (n == -1) {
+            perror("read() failed");
+            exit(1);
+        } else if (n == 0) {
+            *readResult = 0;
+            buf[0] = '\0';
+            return;
+        }
+
+        *readResult = n;
+        buf[*readResult] = '\0';
+
+        newline = strchr(buf, '\n');
+        if (newline) {
+            int lineLen = (int)(newline - buf) + 1;
+            *readResult -= lineLen;
+            memmove(buf, newline + 1, *readResult);
+            buf[*readResult] = '\0';
+            return;
+        }
+    }
+}
+
+/**
+ * prepareBuf(...) prepares the buffer and read a line.
+ * 1. If the first char is ' ' or '\n', skip it.
+ * 2. If the first char is '#', discard the whole line (comment).
+ * 3. If no newline is found before reaching MAX_LINE_LENGTH, print error, discard the whole line.
+ * 4. Otherwise, find '\n' and replace it with '\0'.
+ *
+ * Returns:
+ * - 0 if a line has been successfully read into buf
+ * - 1 if we skipped something and should try reading again
+ * - 2 if EOF is reached with no more data
+ */
+int prepareBuf(char *buf, char **end, int *readResult, int *isEndOfFile, struct stat *st, pipelineseq *ln, int isdebug) {
+    isdebug = 0;
+
+    // If we had a previously completed line, remove it
+    if (*end != NULL) {
+        int lineLen = (int)(*end - buf) + 1;
+        (*readResult) -= lineLen;
+        memmove(buf, *end + 1, *readResult);
+        buf[*readResult] = '\0';
+        *end = NULL;
+    }
+
+    // Keep reading until we have a newline, EOF, or a full buffer
+    while (1) {
+        if (!*isEndOfFile && *readResult < MAX_LINE_LENGTH) {
+            int n = read(STDIN_FILENO, buf + (*readResult), MAX_LINE_LENGTH - (*readResult));
+            if (n == -1 && errno == EINTR) {
+                continue;
+            } else if (n == -1) {
+                perror("read() failed");
+                exit(1);
+            } else if (n == 0) {
+                // EOF encountered
+                *isEndOfFile = 1;
+            } else {
+                (*readResult) += n;
+                buf[*readResult] = '\0';
+            }
+        }
+
+        // If we found a newline, stop reading more for now
+        char *newlinePos = strchr(buf, '\n');
+        if (newlinePos)
+            break;
+
+        // If we've reached EOF (no more data), stop reading
+        if (*isEndOfFile)
+            break;
+
+        // If we filled the buffer completely without finding a newline
+        if (*readResult == MAX_LINE_LENGTH) {
+            fprintf(stderr, "Syntax error.\n");
+            fflush(stderr);
+            discardLine(buf, readResult);
+            return 1;
+        }
+
+        // Otherwise, loop to read more data (partial line scenario)
+    }
+
+    // Now we have either a newline or EOF.
+    // Remove leading spaces and newlines
+    while (*readResult > 0 && (buf[0] == ' ' || buf[0] == '\n')) {
+        (*readResult)--;
+        memmove(buf, buf + 1, *readResult);
+        buf[*readResult] = '\0';
+        return 1;
+    }
+
+    if (*readResult == 0 && *isEndOfFile)
+        return 2;
+
+    // If no data but not EOF, try reading again
+    if (*readResult == 0)
+        return 1;
+
+    // Check if it's a comment line
+    if (buf[0] == '#') {
+        discardLine(buf, readResult);
+        return 1;
+    }
+
+    char *newline = splitLine(buf, (*readResult) + 1);
+    if (newline)
+        *end = newline;
+    else {
+        // No newline found, possibly EOF line
+        *end = NULL; 
+    }
+
+    return 0;
 }

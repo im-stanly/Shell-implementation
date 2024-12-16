@@ -220,10 +220,8 @@ void execPipeline (command *com, pipeline *p){
 	sigprocmask(SIG_UNBLOCK, &setting1, NULL);
 }
 
-void execCommand(char *buf){
-	pipelineseq *ln;
-	ln = parselineSafe(ln, buf);
-	
+void execCommand(char *buf, char *end, int *readResult, struct stat *st, int *distanseAlreadyReaded, 
+					int *isEndOfFile, pipelineseq *ln){
 	command *com;
 	pipelineseq * ps = ln;
 
